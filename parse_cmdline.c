@@ -92,7 +92,9 @@ static void print_help(void)
 	print_help_line("  -c, --check   ", _("Check hash files specified by command line.\n"));
 	print_help_line("  -u, --update  ", _("Update hash files specified by command line.\n"));
 	print_help_line("  -e, --embed-crc  ", _("Rename files by inserting crc32 sum into name.\n"));
+	print_help_line("      --fattr-crc  ", _("Add crc32 and last modified time into extended file attributes.\n"));
 	print_help_line("  -k, --check-embedded  ", _("Verify files by crc32 sum embedded in their names.\n"));
+	print_help_line("      --check-fattr-crc  ", _("Verify files by crc32 sum written in the extended file attributes.\n"));
 	print_help_line("      --list-hashes  ", _("List the names of supported hashes, one per line.\n"));
 	print_help_line("  -B, --benchmark  ", _("Benchmark selected algorithm.\n"));
 	print_help_line("  -v, --verbose ", _("Be verbose.\n"));
@@ -347,6 +349,7 @@ cmdline_opt_t cmdline_opt[] =
 	/* program modes */
 	{ F_UFLG, 'c',   0, "check",  &opt.mode, MODE_CHECK },
 	{ F_UFLG, 'k',   0, "check-embedded",  &opt.mode, MODE_CHECK_EMBEDDED },
+	{ F_UFLG,   0,   0, "check-fattr-crc",  &opt.mode, MODE_CHECK_XATTR_CRC },
 	{ F_UFLG, 'u',   0, "update", &opt.mode, MODE_UPDATE },
 	{ F_UFLG, 'B',   0, "benchmark", &opt.mode, MODE_BENCHMARK },
 	{ F_UFLG,   0,   0, "torrent", &opt.mode, MODE_TORRENT },
@@ -413,6 +416,7 @@ cmdline_opt_t cmdline_opt[] =
 	{ F_UFLG,   0,   0, "speed",  &opt.flags, OPT_SPEED },
 	{ F_UFLG, 'e',   0, "embed-crc",  &opt.flags, OPT_EMBED_CRC },
 	{ F_CSTR,   0,   0, "embed-crc-delimiter", &opt.embed_crc_delimiter, 0 },
+	{ F_UFLG,   0,   0, "fattr-crc",  &opt.flags, OPT_XATTR_CRC },
 	{ F_PFNC,   0,   0, "path-separator", set_path_separator, 0 },
 	{ F_TOUT, 'o',   0, "output", &opt.output, 0 },
 	{ F_TOUT, 'l',   0, "log",    &opt.log,    0 },
@@ -930,7 +934,7 @@ static void apply_cmdline_options(struct parsed_cmd_line_t *cmd_line)
 
 	if (opt.embed_crc_delimiter == 0) opt.embed_crc_delimiter = conf_opt.embed_crc_delimiter;
 	if (!opt.path_separator) opt.path_separator = conf_opt.path_separator;
-	if (opt.flags & OPT_EMBED_CRC) opt.sum_flags |= RHASH_CRC32;
+	if (opt.flags & (OPT_EMBED_CRC | OPT_XATTR_CRC)) opt.sum_flags |= RHASH_CRC32;
 	if (opt.openssl_mask == 0) opt.openssl_mask = conf_opt.openssl_mask;
 	if (opt.find_max_depth < 0) opt.find_max_depth = conf_opt.find_max_depth;
 	if (!(opt.flags & OPT_RECURSIVE)) opt.find_max_depth = 0;

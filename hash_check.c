@@ -649,8 +649,14 @@ int hash_check_verify(hash_check* hashes, struct rhash_context* ctx)
 		hashes->flags |= HC_WRONG_FILESIZE;
 
 	/* verify embedded CRC32 hash sum, if present */
-	if ((hashes->flags & HC_HAS_EMBCRC32) != 0 && get_crc32(ctx) != hashes->embedded_crc32)
-		hashes->flags |= HC_WRONG_EMBCRC32;
+	if ((hashes->flags & HC_HAS_EMBCRC32) != 0) {
+		if(get_crc32(ctx) != hashes->embedded_crc32) {
+			hashes->flags |= HC_WRONG_EMBCRC32;
+		}
+		else if(hashes->flags & HC_WRONG_EMBMTIME) {
+			hashes->flags ^= HC_WRONG_EMBMTIME;
+		}
+	}
 
 	/* return if nothing else to verify */
 	if (hashes->hashes_num == 0)

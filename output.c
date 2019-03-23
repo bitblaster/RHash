@@ -145,6 +145,12 @@ static void print_verbose_error(struct file_info *info)
 		rsh_fprintf(rhash_data.out, _(", embedded CRC32 should be %s"), expected);
 	}
 
+	if (HC_WRONG_EMBMTIME & info->hc.flags) {
+		sprintI64(actual, info->file->mtime, 0);
+		sprintI64(expected, info->hc.xattr_mtime, 0);
+		rsh_fprintf(rhash_data.out, _(", embedded modification time is %s should be %s"), expected, actual);
+	}
+
 	if (HC_WRONG_HASHES & info->hc.flags) {
 		int i;
 		unsigned reported = 0;
@@ -219,7 +225,7 @@ static void print_check_result(struct file_info *info, int print_name, int print
  */
 static void print_results_on_check(struct file_info *info, int init)
 {
-	if (opt.mode & (MODE_CHECK | MODE_CHECK_EMBEDDED)) {
+	if (opt.mode & (MODE_CHECK | MODE_CHECK_EMBEDDED | MODE_CHECK_XATTR_CRC)) {
 		int print_name = (opt.flags & (OPT_PERCENTS | OPT_SKIP_OK) ? !init : init);
 
 		if (!init && (opt.flags & OPT_SKIP_OK) && errno == 0 && !HC_FAILED(info->hc.flags)) {
@@ -307,7 +313,7 @@ static void dots_update_percents(struct file_info *info, uint64_t offset)
 	if ( (offset % pt_size) != 0 ) return;
 
 	if (percents.points == 0) {
-		if (opt.mode & (MODE_CHECK | MODE_CHECK_EMBEDDED)) {
+		if (opt.mode & (MODE_CHECK | MODE_CHECK_EMBEDDED | MODE_CHECK_XATTR_CRC)) {
 			rsh_fprintf(rhash_data.log, _("\nChecking %s\n"), info->print_path);
 		} else {
 			rsh_fprintf(rhash_data.log, _("\nProcessing %s\n"), info->print_path);
@@ -403,7 +409,7 @@ static void p_finish_percents(struct file_info *info, int process_res)
 {
 	int need_check_result;
 
-	need_check_result = (opt.mode & (MODE_CHECK | MODE_CHECK_EMBEDDED)) &&
+	need_check_result = (opt.mode & (MODE_CHECK | MODE_CHECK_EMBEDDED | MODE_CHECK_XATTR_CRC)) &&
 		!((opt.flags & OPT_SKIP_OK) && errno == 0 && !HC_FAILED(info->hc.flags));
 	info->error = process_res;
 

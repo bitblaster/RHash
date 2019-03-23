@@ -19,7 +19,7 @@ typedef struct print_item {
 	const char *data;
 } print_item;
 
-/**
+/**file_t
  * Name and other info of a hash function
  */
 typedef struct print_hash_info

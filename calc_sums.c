@@ -6,6 +6,7 @@
 #include <stdlib.h> /* free() */
 #include <errno.h>
 #include <assert.h>
+#include <sys/xattr.h>
 #ifdef _WIN32
 # include <fcntl.h>  /* _O_BINARY */
 # include <io.h>
@@ -20,6 +21,9 @@
 #include "win_utils.h"
 #include "librhash/rhash.h"
 #include "librhash/rhash_torrent.h"
+
+#define XATTR_MTIME "user.integrity.mtime"
+#define XATTR_CRC32 "user.integrity.crc32"
 
 /**
  * Initialize BTIH hash function. Unlike other algorithms BTIH
@@ -61,7 +65,7 @@ static void init_btih_data(struct file_info *info)
 static void re_init_rhash_context(struct file_info *info)
 {
 	if (rhash_data.rctx != 0) {
-		if (opt.mode & (MODE_CHECK | MODE_CHECK_EMBEDDED)) {
+		if (opt.mode & (MODE_CHECK | MODE_CHECK_EMBEDDED | MODE_CHECK_XATTR_CRC)) {
 			/* a set of hash sums can change from file to file */
 			rhash_free(rhash_data.rctx);
 			rhash_data.rctx = 0;
@@ -110,7 +114,7 @@ static int calc_sums(struct file_info *info)
 			return -1;
 #endif
 	} else {
-		if ((opt.mode & (MODE_CHECK | MODE_CHECK_EMBEDDED)) && FILE_ISDIR(info->file)) {
+		if ((opt.mode & (MODE_CHECK | MODE_CHECK_EMBEDDED | MODE_CHECK_XATTR_CRC)) && FILE_ISDIR(info->file)) {
 			errno = EISDIR;
 			return -1;
 		}
@@ -241,7 +245,32 @@ static int find_embedded_crc32(const char* filepath, unsigned* crc32)
 			e -= 9;
 		}
 	}
+
 	return 0;
+}
+
+/**
+ * Search for a crc32 hash sum in the given file name.
+ *
+ * @param filepath the path to the file.
+ * @param crc32 pointer to integer to receive parsed hash sum.
+ * @return non zero if crc32 was found, zero otherwise.
+ */
+static int find_xattr_crc32(const char* filepath, unsigned* crc32, uint64_t* mtime)
+{
+	int res = getxattr(filepath, XATTR_CRC32, crc32, sizeof(unsigned));
+	
+	if(res < 0) {
+		if(errno==ENOTSUP)
+			log_warning(_("Extended attributes not supported or disabled in this filesystem\n"));
+		return 0;
+	}
+	
+	res = getxattr(filepath, XATTR_MTIME, mtime, sizeof(uint64_t));	
+	if(res < 0)
+		mtime=0;
+
+	return 1;
 }
 
 /**
@@ -308,6 +337,54 @@ int rename_file_by_embeding_crc32(struct file_info *info)
 
 	free(info->full_path);
 	info->full_path = new_path;
+	return 0;
+}
+
+/**
+ * Write crc32 sum in the given file's extended attributes
+ * alongside sith last modified time (as done by cshatag).
+ *
+ * @param info pointer to the data of the file to rename.
+ * @return 0 on success, -1 on fail with error code in errno
+ */
+static int write_xattr_crc32(struct file_info *info)
+{
+	unsigned crc32;
+	uint64_t mtime;
+	int err;
+
+	if (find_xattr_crc32(info->file->path, &crc32, &mtime)) {
+		if(mtime == info->file->mtime) {
+			/* compare with calculated CRC32 */
+			if (crc32 != get_crc32(info->rctx)) {
+				char crc32_str[9];
+				rhash_print(crc32_str, info->rctx, RHASH_CRC32, RHPR_UPPERCASE);
+				/* TRANSLATORS: sample filename with embedded CRC32: file_[A1B2C3D4].mkv */
+				log_error(_("wrong embedded CRC32, should be %s\n"), crc32_str);
+				return -1;
+			}
+			return 0;
+		}
+		else {
+			char stored_crc32_str[9];
+			char actual_crc32_str[9];
+			sprintf(stored_crc32_str, "%X", crc32);
+			rhash_print(actual_crc32_str, info->rctx, RHASH_CRC32, RHPR_UPPERCASE);
+			log_warning(_("File was changed since the last hash computation (stored time: %ld, stored crc32: %s, new time: %ld, new crc32: %s), rewriting data\n"), mtime, stored_crc32_str, info->file->mtime, actual_crc32_str);
+		}
+	}
+	else if(errno==ENOTSUP)
+		return -1;
+
+	crc32 = get_crc32(info->rctx);
+    err = setxattr(info->file->path, XATTR_MTIME, &info->file->mtime, sizeof(uint64_t), 0);
+    err |= setxattr(info->file->path, XATTR_CRC32, &crc32, sizeof(unsigned), 0);
+
+	if(err) {
+		log_warning(_("error writing extended attributes on file %s\n"), info->file->path);
+		return -1;
+	}
+	
 	return 0;
 }
 
@@ -411,6 +488,10 @@ int calculate_and_print_sums(FILE* out, file_t* file, const char *print_path)
 		/* rename the file */
 		rename_file_by_embeding_crc32(&info);
 	}
+	else if (opt.flags & OPT_XATTR_CRC) {
+		/* rename the file */
+		write_xattr_crc32(&info);
+	}
 
 	if ((opt.mode & MODE_TORRENT) && !opt.bt_batch_file) {
 		save_torrent(&info);
@@ -472,10 +553,18 @@ static int verify_sums(struct file_info *info)
 		return 0;
 	}
 
-	if ((opt.flags & OPT_EMBED_CRC) &&
-			find_embedded_crc32(info->print_path, &info->hc.embedded_crc32)) {
-		info->hc.flags |= HC_HAS_EMBCRC32;
-		assert(info->hc.hash_mask & RHASH_CRC32);
+	if ((opt.flags & OPT_EMBED_CRC) && !(info->hc.flags & HC_HAS_EMBCRC32)) {
+		if(find_embedded_crc32(info->print_path, &info->hc.embedded_crc32)) {
+			info->hc.flags |= HC_HAS_EMBCRC32;
+			assert(info->hc.hash_mask & RHASH_CRC32);
+		}
+	}
+
+	if ((opt.flags & OPT_XATTR_CRC) && !(info->hc.flags & HC_HAS_EMBCRC32)) {
+		if(find_xattr_crc32(info->print_path, &info->hc.embedded_crc32, &info->hc.xattr_mtime)) {
+			info->hc.flags |= HC_HAS_EMBCRC32;
+			assert(info->hc.hash_mask & RHASH_CRC32);
+		}
 	}
 
 	if (!hash_check_verify(&info->hc, info->rctx)) {
@@ -511,34 +600,46 @@ int check_hash_file(file_t* file, int chdir)
 	double time;
 
 	/* process --check-embedded option */
-	if (opt.mode & MODE_CHECK_EMBEDDED) {
+	if (opt.mode & (MODE_CHECK_EMBEDDED | MODE_CHECK_XATTR_CRC)) {
 		unsigned crc32;
-		if (find_embedded_crc32(hash_file_path, &crc32)) {
-			/* initialize file_info structure */
-			memset(&info, 0, sizeof(info));
-			info.full_path = rsh_strdup(hash_file_path);
-			info.file = file;
-			file_info_set_print_path(&info, info.full_path);
-			info.sums_flags = info.hc.hash_mask = RHASH_CRC32;
-			info.hc.flags = HC_HAS_EMBCRC32;
-			info.hc.embedded_crc32 = crc32;
-
-			res = verify_sums(&info);
-			fflush(rhash_data.out);
-			if (!rhash_data.interrupted) {
-				if (res == 0)
-					rhash_data.ok++;
-				else if (res == -1 && errno == ENOENT)
-					rhash_data.miss++;
-				rhash_data.processed++;
-			}
-
-			free(info.full_path);
-			file_info_destroy(&info);
-		} else {
+		uint64_t mtime;
+		
+		if ((opt.mode & MODE_CHECK_EMBEDDED) && !find_embedded_crc32(hash_file_path, &crc32)) {
 			log_warning(_("file name doesn't contain a CRC32: %s\n"), hash_file_path);
 			return -1;
 		}
+		
+		if ((opt.mode & MODE_CHECK_XATTR_CRC) && !find_xattr_crc32(hash_file_path, &crc32, &mtime)) {
+			log_warning(_("file extended attributes doesn't contain a CRC32: %s\n"), hash_file_path);
+			return -1;
+		}
+		
+		/* initialize file_info structure */
+		memset(&info, 0, sizeof(info));
+		info.full_path = rsh_strdup(hash_file_path);
+		info.file = file;
+		file_info_set_print_path(&info, info.full_path);
+		info.sums_flags = info.hc.hash_mask = RHASH_CRC32;
+		info.hc.flags = HC_HAS_EMBCRC32;
+		info.hc.embedded_crc32 = crc32;
+		info.hc.xattr_mtime = mtime;
+		/* verify embedded file modification time, if present */
+		if (mtime != file->mtime)
+			info.hc.flags |= HC_WRONG_EMBMTIME;
+
+		res = verify_sums(&info);
+		fflush(rhash_data.out);
+		if (!rhash_data.interrupted) {
+			if (res == 0)
+				rhash_data.ok++;
+			else if (res == -1 && errno == ENOENT)
+				rhash_data.miss++;
+			rhash_data.processed++;
+		}
+
+		free(info.full_path);
+		file_info_destroy(&info);
+
 		return 0;
 	}
 

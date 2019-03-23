@@ -13,10 +13,11 @@ extern "C" {
 #define HC_HAS_EMBCRC32 2
 #define HC_WRONG_FILESIZE 4
 #define HC_WRONG_EMBCRC32 8
-#define HC_WRONG_HASHES 16
-#define HC_FAILED(flags) ((flags) & (HC_WRONG_FILESIZE | HC_WRONG_EMBCRC32 | HC_WRONG_HASHES))
+#define HC_WRONG_EMBMTIME 16
+#define HC_WRONG_HASHES 32
+#define HC_FAILED(flags) ((flags) & (HC_WRONG_FILESIZE | HC_WRONG_EMBCRC32 | HC_WRONG_EMBMTIME | HC_WRONG_HASHES))
 
-#define HC_MAX_HASHES 32
+#define HC_MAX_HASHES 64
 
 /**
  * Parsed hash value.
@@ -40,7 +41,8 @@ typedef struct hash_check
 	uint64_t file_size; /* parsed file size, e.g. from magnet link */
 	unsigned hash_mask; /* the mask of hash ids to verify against */
 	unsigned flags; /* bit flags */
-	unsigned embedded_crc32;  /* CRC32 embedded into filename */
+	unsigned embedded_crc32;  /* CRC32 embedded into filename o file extended attributes */
+	uint64_t xattr_mtime;  /* modification time written into file extended attributes */
 	char *data; /* the buffer with the current hash file line */
 	unsigned found_hash_ids; /* bit mask for matched hash ids */
 	unsigned wrong_hashes;   /* bit mask for mismatched hashes */

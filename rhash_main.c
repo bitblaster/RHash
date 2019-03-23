@@ -93,12 +93,12 @@ static int find_file_callback(file_t* file, int preprocess)
 			}
 			if (must_skip_file(file))
 				return 0;
-		} else if (FILE_ISDATA(file) && (opt.mode & (MODE_CHECK | MODE_CHECK_EMBEDDED | MODE_UPDATE | MODE_TORRENT))) {
+		} else if (FILE_ISDATA(file) && (opt.mode & (MODE_CHECK | MODE_CHECK_EMBEDDED | MODE_CHECK_XATTR_CRC | MODE_UPDATE | MODE_TORRENT))) {
 			log_warning(_("skipping: %s\n"), file->path);
 			return 0;
 		}
 
-		if (opt.mode & (MODE_CHECK | MODE_CHECK_EMBEDDED)) {
+		if (opt.mode & (MODE_CHECK | MODE_CHECK_EMBEDDED | MODE_CHECK_XATTR_CRC)) {
 			res = check_hash_file(file, not_root);
 		} else if (opt.mode & MODE_UPDATE) {
 			res = update_hash_file(file);
@@ -273,7 +273,7 @@ int main(int argc, char *argv[])
 
 	if (opt.template_file) {
 		if (!load_printf_template()) rsh_exit(2);
-	} else if (!rhash_data.printf_str && !(opt.mode & (MODE_CHECK | MODE_CHECK_EMBEDDED))) {
+	} else if (!rhash_data.printf_str && !(opt.mode & (MODE_CHECK | MODE_CHECK_EMBEDDED | MODE_CHECK_XATTR_CRC))) {
 		/* initialize printf output format according to '--<hashname>' options */
 		init_printf_format( (rhash_data.template_text = rsh_str_new()) );
 		rhash_data.printf_str = rhash_data.template_text->str;
@@ -315,7 +315,7 @@ int main(int argc, char *argv[])
 	opt.search_data->call_back_data = 0;
 	scan_files(opt.search_data);
 
-	if ((opt.mode & MODE_CHECK_EMBEDDED) && rhash_data.processed > 1) {
+	if ((opt.mode & (MODE_CHECK_EMBEDDED | MODE_CHECK_XATTR_CRC)) && rhash_data.processed > 1) {
 		print_check_stats();
 	}
 
