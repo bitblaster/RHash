@@ -266,9 +266,10 @@ static int find_xattr_crc32(const char* filepath, unsigned* crc32, uint64_t* mti
 		return 0;
 	}
 	
+	//*mtime = 0xaabbccddeeff1122;
 	res = getxattr(filepath, XATTR_MTIME, mtime, sizeof(uint64_t));	
 	if(res < 0)
-		mtime=0;
+		*mtime=0;
 
 	return 1;
 }
@@ -349,9 +350,9 @@ int rename_file_by_embeding_crc32(struct file_info *info)
  */
 static int write_xattr_crc32(struct file_info *info)
 {
-	unsigned crc32;
-	uint64_t mtime;
-	int err;
+	unsigned crc32=0;
+	uint64_t mtime=0;
+	int err=0;
 
 	if (find_xattr_crc32(info->file->path, &crc32, &mtime)) {
 		if(mtime == info->file->mtime) {
@@ -366,11 +367,14 @@ static int write_xattr_crc32(struct file_info *info)
 			return 0;
 		}
 		else {
+			char actual_mtime[130], stored_mtime[130];
 			char stored_crc32_str[9];
 			char actual_crc32_str[9];
+			sprintI64(stored_mtime, mtime, 0);
 			sprintf(stored_crc32_str, "%X", crc32);
+			sprintI64(actual_mtime, info->file->mtime, 0);
 			rhash_print(actual_crc32_str, info->rctx, RHASH_CRC32, RHPR_UPPERCASE);
-			log_warning(_("File was changed since the last hash computation (stored time: %ld, stored crc32: %s, new time: %ld, new crc32: %s), rewriting data\n"), mtime, stored_crc32_str, info->file->mtime, actual_crc32_str);
+			log_warning(_("File was changed since the last hash computation (stored time: %s, stored crc32: %s, new time: %s, new crc32: %s), rewriting data\n"), stored_mtime, stored_crc32_str, actual_mtime, actual_crc32_str);
 		}
 	}
 	else if(errno==ENOTSUP)
@@ -601,8 +605,8 @@ int check_hash_file(file_t* file, int chdir)
 
 	/* process --check-embedded option */
 	if (opt.mode & (MODE_CHECK_EMBEDDED | MODE_CHECK_XATTR_CRC)) {
-		unsigned crc32;
-		uint64_t mtime;
+		unsigned crc32=0;
+		uint64_t mtime=0;
 		
 		if ((opt.mode & MODE_CHECK_EMBEDDED) && !find_embedded_crc32(hash_file_path, &crc32)) {
 			log_warning(_("file name doesn't contain a CRC32: %s\n"), hash_file_path);
