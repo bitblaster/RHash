@@ -46,7 +46,9 @@ enum {
 	PRINT_BASENAME,
 	PRINT_URLNAME,
 	PRINT_SIZE,
-	PRINT_MTIME /*PRINT_ATIME, PRINT_CTIME*/
+	PRINT_MTIME /*PRINT_ATIME, PRINT_CTIME*/,
+    PRINT_INODE,
+    PRINT_FILEFP
 };
 
 /* parse a token following a percent sign '%' */
@@ -205,7 +207,13 @@ static unsigned printf_name_to_id(const char* name, size_t length, unsigned *fla
 	} else if (length == 5 && memcmp(buf, "mtime", 5) == 0) {
 		*flags = PRINT_MTIME;
 		return 0;
-	}
+	} else if (length == 5 && memcmp(buf, "inode", 5) == 0) {
+		*flags = PRINT_INODE;
+		return 0;
+	} else if (length == 6 && memcmp(buf, "filefp", 6) == 0) {
+        *flags = PRINT_FILEFP;
+        return 0;
+    }
 
 	for (bit = 1; bit <= RHASH_ALL_HASHES; bit = bit << 1, info++) {
 		if (memcmp(buf, info->short_name, length) == 0 &&
@@ -270,7 +278,8 @@ print_item* parse_percent_item(const char** str)
 		if (*q == '}') {
 			hash_id = printf_name_to_id(format, (int)(q - (format)), &modifier_flags);
 			format--;
-			if (hash_id || modifier_flags == PRINT_URLNAME || modifier_flags == PRINT_MTIME) {
+			if (hash_id || modifier_flags == PRINT_URLNAME || modifier_flags == PRINT_MTIME ||
+			    modifier_flags == PRINT_INODE || modifier_flags == PRINT_FILEFP) {
 				/* set uppercase flag if the first letter of printf-entity is uppercase */
 				modifier_flags |= (format[1] & 0x20 ? 0 : PRINT_FLAG_UPPERCASE);
 				format = q;
@@ -470,8 +479,14 @@ void print_line(FILE* out, print_item* list, struct file_info *info)
 				rsh_fprintf(out, "%s", url);
 				break;
 			case PRINT_MTIME: /* the last-modified tine of the filename */
-				print_time64(out, info->file->mtime);
+				print_time64(out, info->file->stats->st_mtime);
 				break;
+            case PRINT_INODE: /* the file's inode identifier */
+                rsh_fprintf(out, "%lu", info->file->stats->st_ino);
+                break;
+            case PRINT_FILEFP: /* a file fingerprint using both inode and mtime */
+                rsh_fprintf(out, "i%lut%ld", info->file->stats->st_ino, info->file->stats->st_mtim.tv_sec);
+                break;
 			case PRINT_SIZE: /* file size */
 				fprintI64(out, info->size, list->width, (list->flags & PRINT_FLAG_PAD_WITH_ZERO));
 				break;
@@ -599,10 +614,16 @@ void init_printf_format(strbuf_t* out)
 		force_base32_mask = (RHASH_SHA1 | RHASH_BTIH);
 		tail = "\\n";
 	} else if (opt.fmt == FMT_SIMPLE && 0 == (opt.sum_flags & (opt.sum_flags - 1))) {
-		fmt = "\001  %p\\n";
+		if (opt.flags & OPT_DETECT_CHANGES)
+			fmt = "\001  %{filefp}  %p\\n";
+		else
+			fmt = "\001  %p\\n";
 	} else {
 		rsh_str_append_n(out, "%p", 2);
-		fmt = (opt.fmt == FMT_SFV ? " \001" : "  \001");
+		if (opt.flags & OPT_DETECT_CHANGES)
+			fmt = (opt.fmt == FMT_SFV ? " \001 %{filefp}" : "  \001  %{filefp}");
+		else
+			fmt = (opt.fmt == FMT_SFV ? " \001" : "  \001");
 		tail = "\\n";
 	}
 
@@ -681,7 +702,7 @@ int print_sfv_header_line(FILE* out, const file_t* file, const char* printpath)
 
 	sprintI64(buf, file->size, 12);
 	rsh_fprintf(out, "; %s  ", buf);
-	print_time64(out, file->mtime);
+	print_time64(out, file->stats->st_mtime);
 	rsh_fprintf(out, " %s\n", printpath);
 	return 0;
 }

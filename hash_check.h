@@ -45,6 +45,8 @@ typedef struct hash_check
 	unsigned found_hash_ids; /* bit mask for matched hash ids */
 	unsigned wrong_hashes;   /* bit mask for mismatched hashes */
 	int hashes_num; /* number of parsed hashes */
+	ino_t inode;
+	time_t mtime;
 	hash_value hashes[HC_MAX_HASHES];
 } hash_check;
 

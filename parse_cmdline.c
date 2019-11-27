@@ -408,6 +408,8 @@ cmdline_opt_t cmdline_opt[] =
 	{ F_UFLG, 'v',   0, "verbose", &opt.flags, OPT_VERBOSE },
 	{ F_UFLG,   0,   0, "gost-reverse", &opt.flags, OPT_GOST_REVERSE },
 	{ F_UFLG,   0,   0, "skip-ok", &opt.flags, OPT_SKIP_OK },
+    {F_UFLG,    0,   0, "detect-changes", &opt.flags, OPT_DETECT_CHANGES },
+    { F_UFLG,   0,   0, "remove-missing", &opt.flags, OPT_REMOVE_MISSING },
 	{ F_UFLG, 'i',   0, "ignore-case", &opt.flags, OPT_IGNORE_CASE },
 	{ F_UENC,   0,   0, "percents", &opt.flags, OPT_PERCENTS },
 	{ F_UFLG,   0,   0, "speed",  &opt.flags, OPT_SPEED },

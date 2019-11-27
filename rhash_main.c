@@ -23,7 +23,8 @@
 #include "output.h"
 #include "win_utils.h"
 #include "librhash/rhash.h"
-
+#include <sys/stat.h>
+#include <errno.h>
 
 struct rhash_t rhash_data;
 
@@ -51,8 +52,9 @@ static int must_skip_file(file_t* file)
  * @param file the file to process
  * @param preprocess non-zero when preprocessing files, zero for actual processing.
  */
-static int find_file_callback(file_t* file, int preprocess)
+static int find_file_callback(file_t* file, call_back_ctx call_back_data)
 {
+	int preprocess = call_back_data.ival;
 	int res = 0;
 	assert(!FILE_ISDIR(file));
 	assert(opt.search_data);
@@ -264,9 +266,25 @@ int main(int argc, char *argv[])
 		/* print short usage help */
 		log_msg(_("Usage: %s [OPTION...] <FILE>...\n\n"
 			"Run `%s --help' for more help.\n"), CMD_FILENAME, CMD_FILENAME);
-		rsh_exit(0);
+		rsh_exit(1);
 	}
 	assert(opt.search_data != 0);
+
+	if ((opt.mode & MODE_UPDATE) && (opt.flags & OPT_RECURSIVE)) {
+		char err = 0;
+		if (opt.search_data->root_files.size > 1)
+			err = 1;
+		else {
+			file_t* file = get_root_file(opt.search_data, 0);
+			if (FILE_ISDIR(file))
+				err = 1;
+		}
+
+		if (err) {
+			log_error(_("the 'update' mode with 'recursive' option needs a single hash file as input\n"));
+			rsh_exit(1);
+		}
+	}
 
 	/* setup printf formatting string */
 	rhash_data.printf_str = opt.printf_str;
@@ -300,7 +318,7 @@ int main(int argc, char *argv[])
 	/* preprocess files */
 	if (sfv || opt.bt_batch_file) {
 		/* note: errors are not reported on preprocessing */
-		opt.search_data->call_back_data = 1;
+		opt.search_data->call_back_data.ival = 1;
 		scan_files(opt.search_data);
 
 		fflush(rhash_data.out);
@@ -312,7 +330,7 @@ int main(int argc, char *argv[])
 
 	/* process files */
 	opt.search_data->options |= FIND_LOG_ERRORS;
-	opt.search_data->call_back_data = 0;
+	opt.search_data->call_back_data.ival = 0;
 	scan_files(opt.search_data);
 
 	if ((opt.mode & MODE_CHECK_EMBEDDED) && rhash_data.processed > 1) {

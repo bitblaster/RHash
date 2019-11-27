@@ -1,8 +1,8 @@
 
 include config.mak
 
-HEADERS = calc_sums.h hash_print.h common_func.h hash_update.h file.h file_mask.h file_set.h find_file.h hash_check.h output.h parse_cmdline.h rhash_main.h win_utils.h platform.h version.h
-SOURCES = calc_sums.c hash_print.c common_func.c hash_update.c file.c file_mask.c file_set.c find_file.c hash_check.c output.c parse_cmdline.c rhash_main.c win_utils.c
+HEADERS = calc_sums.h hash_print.h common_func.h hash_update.h file.h file_mask.h file_set.h find_file.h hash_check.h line_set.h output.h parse_cmdline.h rhash_main.h win_utils.h platform.h version.h
+SOURCES = calc_sums.c hash_print.c common_func.c hash_update.c file.c file_mask.c file_set.c find_file.c hash_check.c line_set.c output.c parse_cmdline.c rhash_main.c win_utils.c
 OBJECTS = $(SOURCES:.c=.o)
 WIN_DIST_FILES = dist/MD5.bat dist/magnet.bat dist/rhashrc.sample
 OTHER_FILES = configure Makefile ChangeLog INSTALL.md COPYING README.md \
@@ -37,6 +37,7 @@ RPMTOP  = rpms
 RPMDIRS = SOURCES SPECS BUILD SRPMS RPMS
 INSTALL_PROGRAM = $(INSTALL) -m 755
 INSTALL_DATA    = $(INSTALL) -m 644
+CFLAGS += -Wno-parentheses
 
 all: $(BUILD_TARGETS)
 install: build-install-binary install-data install-symlinks $(EXTRA_INSTALL)

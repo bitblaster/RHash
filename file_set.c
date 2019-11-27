@@ -4,6 +4,7 @@
 #include <stddef.h> /* ptrdiff_t */
 #include <stdlib.h> /* qsort */
 #include <string.h>
+#include <sys/stat.h>
 
 #include "file_set.h"
 #include "common_func.h"
@@ -19,11 +20,36 @@
  * @param string the string to hash
  * @return a string hash
  */
-static unsigned file_set_make_hash(const char* string)
+static uint64_t file_set_make_hash(const char* string)
 {
 	unsigned hash;
-	if (rhash_msg(RHASH_CRC32, string, strlen(string), (unsigned char*)&hash) < 0)
+    int res = -1;
+
+	if (opt.flags & OPT_DETECT_CHANGES) {
+	    file_t tmp_file;
+	    file_init(&tmp_file, string, FILE_OPT_DONT_FREE_PATH);
+        if(file_stat(&tmp_file, 0) == 0)
+            res = tmp_file.stats->st_ino;
+        else
+            res = 0;
+
+        file_cleanup(&tmp_file);
+
+		return res;
+	}
+
+	if (opt.flags & OPT_IGNORE_CASE) {
+		char* tmp_string = str_tolower(string);
+		res = rhash_msg(RHASH_CRC32, tmp_string, strlen(tmp_string), (unsigned char *) &hash);
+		free(tmp_string);
+	}
+	else {
+		res = rhash_msg(RHASH_CRC32, string, strlen(string), (unsigned char *) &hash);
+	}
+
+	if(res < 0) {
 		return 0;
+	}
 	return hash;
 }
 
@@ -35,17 +61,11 @@ static unsigned file_set_make_hash(const char* string)
  */
 static int file_set_item_set_filepath(file_set_item* item, const char* filepath)
 {
-	if (item->search_filepath != item->filepath)
-		free(item->search_filepath);
 	free(item->filepath);
 	item->filepath = rsh_strdup(filepath);
 	if (!item->filepath) return 0;
 
-	/* apply str_tolower if CASE_INSENSITIVE */
-	/* Note: strcasecmp() is not used instead of search_filepath due to portability issue */
-	/* Note: item->search_filepath is always correctly freed by file_set_item_free() */
-	item->search_filepath = (opt.flags & OPT_IGNORE_CASE ? str_tolower(item->filepath) : item->filepath);
-	item->hash = file_set_make_hash(item->search_filepath);
+	item->name_hash_or_inode = file_set_make_hash(item->filepath);
 	return 1;
 }
 
@@ -55,7 +75,7 @@ static int file_set_item_set_filepath(file_set_item* item, const char* filepath)
  * @param filepath a filepath to initialize the file_set_item
  * @return allocated file_set_item structure
  */
-static file_set_item* file_set_item_new(const char* filepath)
+file_set_item* file_set_item_new(const char* filepath)
 {
 	file_set_item *item = (file_set_item*)rsh_malloc(sizeof(file_set_item));
 	memset(item, 0, sizeof(file_set_item));
@@ -76,9 +96,6 @@ static file_set_item* file_set_item_new(const char* filepath)
  */
 void file_set_item_free(file_set_item *item)
 {
-	if (item->search_filepath != item->filepath) {
-		free(item->search_filepath);
-	}
 	free(item->filepath);
 	free(item);
 }
@@ -94,8 +111,13 @@ static int crc_pp_rec_compare(const void *pp_rec1, const void *pp_rec2)
 {
 	const file_set_item *rec1 = *(file_set_item *const *)pp_rec1;
 	const file_set_item *rec2 = *(file_set_item *const *)pp_rec2;
-	if (rec1->hash != rec2->hash) return (rec1->hash < rec2->hash ? -1 : 1);
-	return strcmp(rec1->search_filepath, rec2->search_filepath);
+	if (rec1->name_hash_or_inode != rec2->name_hash_or_inode)
+		return (rec1->name_hash_or_inode < rec2->name_hash_or_inode ? -1 : 1);
+
+	if (opt.flags & OPT_IGNORE_CASE)
+		return strcmpci(rec1->filepath, rec2->filepath);
+	else
+		return strcmp(rec1->filepath, rec2->filepath);
 }
 
 /**
@@ -154,18 +176,13 @@ int file_set_exist(file_set *set, const char* filepath)
 {
 	int a, b, c;
 	int cmp, res = 0;
-	unsigned hash;
-	char* search_filepath;
+	uint64_t hash;
 
 	if (!set->size) return 0; /* not found */
 	assert(set->array != NULL);
 
-	/* apply str_tolower if case shall be ignored */
-	search_filepath = (opt.flags & OPT_IGNORE_CASE ?
-		str_tolower(filepath) : (char*)filepath);
-
 	/* generate hash to speedup the search */
-	hash = file_set_make_hash(search_filepath);
+	hash = file_set_make_hash(filepath);
 
 	/* fast binary search */
 	for (a = -1, b = (int)set->size; (a + 1) < b;) {
@@ -175,10 +192,13 @@ int file_set_exist(file_set *set, const char* filepath)
 		assert(0 <= c && c < (int)set->size);
 
 		item = (file_set_item*)set->array[c];
-		if (hash != item->hash) {
-			cmp = (hash < item->hash ? -1 : 1);
+		if (hash != item->name_hash_or_inode) {
+			cmp = (hash < item->name_hash_or_inode ? -1 : 1);
 		} else {
-			cmp = strcmp(search_filepath, item->search_filepath);
+			if (opt.flags & OPT_IGNORE_CASE)
+				cmp = strcmpci(filepath, item->filepath);
+			else
+				cmp = strcmp(filepath, item->filepath);
 			if (cmp == 0) {
 				res = 1; /* file path has been found */
 				break;
@@ -187,6 +207,5 @@ int file_set_exist(file_set *set, const char* filepath)
 		if (cmp < 0) b = c;
 		else a = c;
 	}
-	if (search_filepath != filepath) free(search_filepath);
 	return res;
 }

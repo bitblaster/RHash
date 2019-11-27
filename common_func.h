@@ -36,6 +36,7 @@ int  int_len(uint64_t num);
 
 int  urlencode(char *dst, const char *name);
 int  is_binary_string(const char* str);
+int strcmpci(const char *s1, const char *s2);
 char* str_tolower(const char* str);
 char* str_trim(char* str);
 char* str_set(char* buf, int ch, int size);

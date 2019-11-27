@@ -49,7 +49,12 @@ Update hash files specified by command line.
 The program calculates and appends hashes to the updated hash file
 in the format specified by formatting options.
 Hashes are calculated for those files from the same directory
-as the hash file, which are yet not present in it.
+as the hash file, which are yet not present in it, unless the -r
+option is used, which allows recursive updating of a 
+.I single
+hash file.
+
+See also the --remove-missing and --detect-changes options and how they affect the update behavior.
 .IP "\-k, \-\-check\-embedded"
 Verify files by crc32 sum embedded in their names.
 .IP "\-\-torrent"
@@ -158,6 +163,18 @@ actions to the command line arguments.
 Set the file to output calculated hashes and verification results to.
 .IP "\-l, \-\-log=<file\-path>"
 Set the file to log errors and verbose information to.
+.IP "\-\-remove-missing"
+In update mode, discards the rows which refer to files no more present in the filesystem.
+.IP "\-\-detect-changes"
+In default mode, this will add the file's status "fingerprint" to the output (see
+.I {filefp}
+format directive).
+
+Subsequent executions in update mode will use that information to detect moves/changes.
+This speeds up dramatically processing for large hash files, since when a move is
+detected only the filename is updated, whilst the hashes remain the same. Also this 
+guarantees subsequent excecutions in check mode to identify filesystem 
+corruptions occurred after a file move.
 .IP "\-\-openssl=<list>"
 Specify which hash functions should be calculated using the OpenSSL library.
 The <list> is a comma delimited list of hash names, but only those
@@ -244,8 +261,12 @@ File's name.
 URL\(hyencoded filename.
 .IP %s
 File's size in bytes.
+.IP %{inode}
+File's inode number.
 .IP %{mtime}
 File's last modification time.
+.IP %{filefp}
+File status "fingerprint", outputs "i<inode>t<mtime>"
 .IP "%a or %A"
 AICH hash sum. 
 .IP "%c or %C"

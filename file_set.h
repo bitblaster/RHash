@@ -13,9 +13,8 @@ extern "C" {
  */
 typedef struct file_set_item
 {
-	unsigned hash;
+	uint64_t name_hash_or_inode;
 	char* filepath;
-	char* search_filepath; /* for case-insensitive comparison */
 } file_set_item;
 
 /* array to store filenames from a parsed hash file */
@@ -31,6 +30,7 @@ void file_set_item_free(file_set_item *item);
 void file_set_add_name(file_set *set, const char* filename);
 void file_set_sort(file_set *set);
 void file_set_sort_by_path(file_set *set);
+file_set_item* file_set_item_new(const char* filepath);
 int file_set_exist(file_set *set, const char* filename);
 
 #ifdef __cplusplus

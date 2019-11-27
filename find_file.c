@@ -22,11 +22,7 @@
 #define IS_CURRENT_OR_PARENT_DIR(s) ((s)[0]=='.' && (!(s)[1] || ((s)[1] == '.' && !(s)[2])))
 #define IS_CURRENT_OR_PARENT_DIRW(s) ((s)[0]==L'.' && (!(s)[1] || ((s)[1] == L'.' && !(s)[2])))
 
-#define RF_BLOCK_SIZE 256
-#define add_root_file(data, file) rsh_blocks_vector_add(&(data)->root_files, (file), RF_BLOCK_SIZE, sizeof(file_t))
-#define get_root_file(data, index) rsh_blocks_vector_get_item(&(data)->root_files, (index), RF_BLOCK_SIZE, file_t)
-
-static int dir_scan(file_t* start_dir, file_search_data* data);
+int dir_scan(file_t* start_dir, file_search_data* data);
 
 /* allocate and fill the file_search_data */
 file_search_data* file_search_data_new(void)
@@ -355,7 +351,7 @@ typedef struct dir_iterator
  * @param data the options specifying how to walk the directory tree
  * @return 0 on success, -1 on error
  */
-static int dir_scan(file_t* start_dir, file_search_data* data)
+int dir_scan(file_t* start_dir, file_search_data* data)
 {
 	dir_entry *dirs_stack = NULL; /* root of the dir_list */
 	dir_iterator* it;

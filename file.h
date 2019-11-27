@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <wchar.h> /* for wchar_t */
+#include <sys/stat.h>
 
 #if _MSC_VER > 1300
 # include "platform.h"
@@ -46,7 +47,7 @@ typedef struct file_t
 #endif
 	char* data;
 	uint64_t size;
-	uint64_t mtime;
+    struct stat* stats;
 	unsigned mode;
 } file_t;
 

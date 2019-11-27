@@ -3,6 +3,8 @@
 #include <assert.h>
 #include <ctype.h>  /* isspace */
 #include <string.h>
+#include <stdlib.h>
+#include <errno.h>
 
 #include "hash_check.h"
 #include "hash_print.h"
@@ -75,7 +77,7 @@ static void urldecode(char *buffer)
 static void process_backslashes(char* path)
 {
   for (;*path;path++) {
-    if (*path == '\\') *path = '/';
+	if (*path == '\\') *path = '/';
   }
 }
 #else /* _WIN32 */
@@ -248,7 +250,8 @@ typedef struct hc_search
  * string. The format string can contain the following special characters:
  * '\1' - hash function name, '\2' - any hash, '\3' - specified hash,
  * '\4' - an URL-encoded file name, '\5' - a file size,
- * '\6' - a required-space, '\7' - a space or string end.
+ * '\6' - a required-space, '\7' - a space or string end,
+ * '\x09' - file-id
  * A space ' ' means 0 or more space characters.
  * '$' - parse the rest of the buffer and the format string backward.
  * Other (non-special) symbols mean themselves.
@@ -370,6 +373,35 @@ static int hash_check_find_str(hc_search *search, const char* format)
 			break;
 		case '$':
 			backward = 1; /* switch to parsing string backward */
+			break;
+		case '\x09':
+			{
+				char *startptr, *endptr;
+				if (backward) {
+					for (begin = end - 1; begin > search->begin && *begin != 'i' && (*begin >= '0' && *begin <= '9' || *begin == 't'); begin--);
+				}
+				if (*begin != 'i')
+					return 0;
+				startptr = begin;
+				hc->inode = 0L;
+				hc->mtime = 0L;
+
+				errno = 0;
+				hc->inode = strtoul(begin + 1, &endptr, 10);
+				if (errno != 0 || *endptr != 't')
+					return 0;
+
+				hc->mtime = strtol(endptr + 1, &endptr, 10);
+				if (errno != 0 || endptr > end || (*endptr != ' ' && endptr < end))
+					return 0;
+
+				if (backward) {
+					begin = search->begin;
+					end = startptr;
+				} else {
+					begin = endptr;
+				}
+			}
 			break;
 		default:
 			if ((backward ? *(--end) : *(begin++)) != *search_str) return 0;
@@ -507,12 +539,13 @@ int hash_check_parse_line(char* line, hash_check* hashes, int check_eol)
 		hs.hash_type = (HV_HEX | HV_B32); /* AICH is usually base32-encoded*/
 		hash_check_find_str(&hs, "h=\3|");
 	} else {
-		if (hash_check_find_str(&hs, "\1 ( $ ) = \3")) {
+		unsigned scan_inode = opt.flags & OPT_DETECT_CHANGES;
+		if (scan_inode && hash_check_find_str(&hs, "\1 ( $ ) = \3\6\x09") || hash_check_find_str(&hs, "\1 ( $ ) = \3")) {
 			/* BSD-formatted line has been processed */
-		} else if (hash_check_find_str(&hs, "$\6\2")) {
+		} else if (scan_inode && hash_check_find_str(&hs, "$\6\2\6\x09") || hash_check_find_str(&hs, "$\6\2")) {
 			while (hash_check_find_str(&hs, "$\6\2"));
 			if (hashes->hashes_num > 1) reversed = 1;
-		} else if (hash_check_find_str(&hs, "\2\7")) {
+		} else if (scan_inode && hash_check_find_str(&hs, "\2\6\x09\7") || hash_check_find_str(&hs, "\2\7")) {
 			if (hs.begin == hs.end) {
 				/* the line contains no file path, only a single hash */
 				single_hash = 1;

@@ -19,11 +19,21 @@
 #include "parse_cmdline.h"
 #include "rhash_main.h"
 #include "win_utils.h"
+#include "line_set.h"
+#include "find_file.h"
+#include <sys/stat.h>
 
 /* first define some internal functions, implemented later in this file */
-static int add_new_crc_entries(file_t* file, file_set *crc_entries);
-static int file_set_load_from_crc_file(file_set *set, file_t* file);
+static int add_new_crc_entries(file_t* file, file_set *crc_entries, inode_line_set* removed_entries);
+static int file_set_load_from_crc_file(file_set *set, inode_line_set* removed_entries, file_t* file);
 static int fix_sfv_header(file_t* file);
+
+typedef struct update_call_back_ctx
+{
+	file_set *crc_entries;
+	file_set* files_to_add;
+	inode_line_set *removed_entries;
+} update_call_back_ctx;
 
 /**
  * Update given crc file, by adding to it hashes of files from the same
@@ -35,6 +45,7 @@ static int fix_sfv_header(file_t* file);
 int update_hash_file(file_t* file)
 {
 	file_set* crc_entries;
+	inode_line_set* removed_entries;
 	timedelta_t timer;
 	int res;
 
@@ -43,7 +54,8 @@ int update_hash_file(file_t* file)
 	}
 
 	crc_entries = file_set_new();
-	res = file_set_load_from_crc_file(crc_entries, file);
+	removed_entries = line_set_new();
+	res = file_set_load_from_crc_file(crc_entries, removed_entries, file);
 
 	if (opt.flags & OPT_SPEED) rsh_timer_start(&timer);
 	rhash_data.total_size = 0;
@@ -53,11 +65,13 @@ int update_hash_file(file_t* file)
 		/* add the crc file itself to the set of excluded from re-calculation files */
 		file_set_add_name(crc_entries, get_basename(file->path));
 		file_set_sort(crc_entries);
+		line_set_sort(removed_entries);
 
 		/* update crc file with sums of files not present in the crc_entries */
-		res = add_new_crc_entries(file, crc_entries);
+		res = add_new_crc_entries(file, crc_entries, removed_entries);
 	}
 	file_set_free(crc_entries);
+	line_set_free(removed_entries);
 
 	if (opt.flags & OPT_SPEED && rhash_data.processed > 0) {
 		double time = rsh_timer_stop(&timer);
@@ -74,19 +88,38 @@ int update_hash_file(file_t* file)
  * @param file the file containing hash sums to load
  * @return 0 on success, -1 on fail with error code in errno
  */
-static int file_set_load_from_crc_file(file_set *set, file_t* file)
+static int file_set_load_from_crc_file(file_set *set, inode_line_set* removed_entries, file_t* file)
 {
-	FILE *fd;
+	FILE *in;
+	FILE* out;
 	int line_num;
 	char buf[2048];
+	char orig_line[2048];
 	hash_check hc;
+	file_t new_file;
+	int err = 0;
 
-	if ( !(fd = file_fopen(file, FOpenRead | FOpenBin) )) {
+	if ( !(in = file_fopen(file, FOpenRead | FOpenBin) )) {
 		/* if file not exist, it will be created */
 		return (errno == ENOENT ? 0 : -1);
 	}
-	for (line_num = 0; fgets(buf, 2048, fd); line_num++) {
+
+	/* open a temporary file for writing */
+	file_path_append(&new_file, file, ".new");
+	if ( !(out = file_fopen(&new_file, FOpenWrite) )) {
+		log_file_t_error(&new_file);
+		file_cleanup(&new_file);
+		fclose(in);
+		return -1;
+	}
+
+	if (opt.fmt == FMT_SFV)
+		print_sfv_banner(out);
+
+	for (line_num = 0; fgets(buf, 2048, in); line_num++) {
+		char append = 1;
 		char* line = buf;
+		strcpy(orig_line, line);
 
 		/* skip unicode BOM */
 		if (line_num == 0 && buf[0] == (char)0xEF && buf[1] == (char)0xBB && buf[2] == (char)0xBF) line += 3;
@@ -95,20 +128,75 @@ static int file_set_load_from_crc_file(file_set *set, file_t* file)
 
 		if (is_binary_string(line)) {
 			log_error(_("skipping binary file %s\n"), file->path);
-			fclose(fd);
-			return -1;
+			err = 1;
+			break;
 		}
 
-		if (IS_COMMENT(*line) || *line == '\r' || *line == '\n') continue;
+		if (IS_COMMENT(*line) || *line == '\r' || *line == '\n')
+			continue;
 
 		/* parse a hash file line */
-		if (hash_check_parse_line(line, &hc, !feof(fd))) {
+		if (hash_check_parse_line(line, &hc, !feof(in))) {
 			/* store file info to the file set */
-			if (hc.file_path) file_set_add_name(set, hc.file_path);
+			if (hc.file_path) {
+				if ((opt.flags & OPT_REMOVE_MISSING) || (opt.flags & OPT_DETECT_CHANGES)) {
+					struct stat stats;
+					int res = stat(hc.file_path, &stats);
+					if (res != 0) { // file is missing
+						append = 0;
+						if ((opt.flags & OPT_DETECT_CHANGES) && hc.inode && hc.mtime) {
+							char *path_offset = strstr(orig_line, hc.file_path);
+							line_set_add_line(removed_entries, orig_line, path_offset - orig_line, strlen(hc.file_path),
+											  hc.inode, hc.mtime);
+						}
+					} else if ((opt.flags & OPT_DETECT_CHANGES) && (hc.inode != stats.st_ino || hc.mtime != stats.st_mtim.tv_sec)) {
+						append = 0;
+					}
+				}
+
+				if (append) {
+					file_set_add_name(set, hc.file_path);
+					if (opt.fmt == FMT_SFV) {
+						file_t tmp_file;
+						file_init(&tmp_file, hc.file_path, FILE_OPT_DONT_FREE_PATH);
+						if (file_stat(&tmp_file, 0) < 0) {
+							err = 1;
+							file_cleanup(&tmp_file);
+							break;
+						}
+						print_sfv_header_line(out, &tmp_file, 0);
+						file_cleanup(&tmp_file);
+					}
+				}
+			} else if (opt.flags & OPT_DETECT_CHANGES) {
+				append = 0;
+			}
+		} else if (opt.flags & OPT_DETECT_CHANGES) {
+			append = 0;
 		}
+
+		if (append && fputs(orig_line, out) < 0)
+			break;
 	}
-	fclose(fd);
-	return 0;
+
+	if (ferror(in)) {
+		log_file_t_error(file);
+		err = 1;
+	}
+	if (ferror(out)) {
+		log_file_t_error(&new_file);
+		err = 1;
+	}
+	fclose(in);
+	fclose(out);
+
+	/* overwrite the hash file with a new one */
+	if (!err && file_rename(&new_file, file) < 0) {
+		log_error(_("can't move %s to %s: %s\n"),
+				  new_file.path, file->path, strerror(errno));
+	}
+	file_cleanup(&new_file);
+	return (err ? -1 : 0);
 }
 
 /**
@@ -121,11 +209,12 @@ static int file_set_load_from_crc_file(file_set *set, file_t* file)
  * @param files_to_add the set of files to hash and add
  * @return 0 on success, -1 on error
  */
-static int add_sums_to_file(file_t* file, char* dir_path, file_set *files_to_add)
+static int add_sums_to_file(file_t* file, char* dir_path, file_set *files_to_add, inode_line_set* removed_entries)
 {
 	FILE* fd;
 	unsigned i;
 	int ch;
+	char new_line[2048];
 
 	/* SFV banner will be printed only in SFV mode and only for empty crc files */
 	int print_banner = (opt.fmt == FMT_SFV);
@@ -167,6 +256,7 @@ static int add_sums_to_file(file_t* file, char* dir_path, file_set *files_to_add
 	for (i = 0; i < files_to_add->size; i++, rhash_data.processed++) {
 		file_t tmp_file;
 		char *print_path = file_set_get(files_to_add, i)->filepath;
+		int removed_index = -1;
 		memset(&tmp_file, 0, sizeof(tmp_file));
 
 		if (dir_path[0] != '.' || dir_path[1] != 0) {
@@ -184,8 +274,26 @@ static int add_sums_to_file(file_t* file, char* dir_path, file_set *files_to_add
 		}
 		file_stat(&tmp_file, 0);
 
-		/* print hash sums to the crc file */
-		calculate_and_print_sums(fd, &tmp_file, print_path);
+		removed_index = line_set_exist(removed_entries, tmp_file.stats->st_ino);
+		if (removed_index >= 0) {
+			// the file has been moved, so reuse the same hashes of the input file for that inode
+			line_set_item *removed_item = line_set_get(removed_entries, removed_index);
+			if (removed_item->mtime == tmp_file.stats->st_mtim.tv_sec) { // check that the inode has not been reused
+				// replace the original name with the new,  keeping the rest of the original line
+				strncpy(new_line, removed_item->line, removed_item->path_offset);
+				strcpy(new_line + removed_item->path_offset, tmp_file.path);
+				strcat(new_line, removed_item->line + removed_item->path_offset + removed_item->path_len);
+				fputs(new_line, fd);
+			}
+			else {
+				/* print hash sums to the crc file */
+				calculate_and_print_sums(fd, &tmp_file, print_path);
+			}
+		}
+		else {
+			/* print hash sums to the crc file */
+			calculate_and_print_sums(fd, &tmp_file, print_path);
+		}
 
 		file_cleanup(&tmp_file);
 
@@ -200,50 +308,41 @@ static int add_sums_to_file(file_t* file, char* dir_path, file_set *files_to_add
 }
 
 /**
- * Read a directory and load files not present in the crc_entries file-set
- * into the files_to_add file-set.
+ * Check if the file must be skipped. Returns 1 if the file path
+ * is the same as the output or the log file path.
  *
- * @param dir_path the path of the directory to load files from
- * @param crc_entries file-set of files which should be skipped
- * @param files_to_add file-set to load the list of files into
- * @return 0 on success, -1 on error (and errno is set)
+ * @param file the file to check
+ * @param mask the mask of accepted files
+ * @return 1 if the file should be skipped, 0 otherwise
  */
-static int load_filtered_dir(const char* dir_path, file_set *crc_entries, file_set *files_to_add)
+static int must_skip_file(file_t* file)
 {
-	DIR *dp;
-	struct dirent *de;
+	const rsh_tchar* path = FILE_TPATH(file);
 
-	/* read directory */
-	dp = opendir(dir_path);
-	if (!dp) return -1;
+	/* check if the file path is the same as the output or the log file path */
+	return (opt.output && are_paths_equal(path, opt.output)) ||
+		   (opt.log && are_paths_equal(path, opt.log));
+}
+/**
+ * Callback function to process new files while recursively traversing a directory.
+ * It adds new files to the file_set of the caller.
+ *
+ * @param file the file to process
+ * @param call_back_data context of the call, containing the entries already present in the
+ *        current hash file and the set to be updated with the new files
+ */
+static int update_file_callback(file_t* file, call_back_ctx call_back_data) {
+	update_call_back_ctx* ctx = call_back_data.pval;
 
-	while ((de = readdir(dp)) != NULL) {
-		char *path;
-		unsigned is_regular;
-
-		/* skip "." and ".." directories */
-		if (de->d_name[0] == '.' && (de->d_name[1] == 0 ||
-				(de->d_name[1] == '.' && de->d_name[2] == 0))) {
-					continue;
-		}
-
-		/* check if the file is a regular one */
-		path = make_path(dir_path, de->d_name);
-		is_regular = is_regular_file(path);
-		free(path);
-
-		/* skip non-regular files (directories, device files, e.t.c.),
-		 * as well as files not accepted by current file filter
-		 * and files already present in the crc_entries file set */
-		if (!is_regular || !file_mask_match(opt.files_accept, de->d_name) ||
-			(opt.files_exclude && file_mask_match(opt.files_exclude, de->d_name)) ||
-			file_set_exist(crc_entries, de->d_name))
-		{
-			continue;
-		}
-
-		file_set_add_name(files_to_add, de->d_name);
+	if (FILE_ISDATA(file) || !file_mask_match(opt.files_accept, file->path) ||
+		(opt.files_exclude && file_mask_match(opt.files_exclude, file->path)) ||
+		must_skip_file(file)) {
+		return 0;
 	}
+
+	if(!file_set_exist(ctx->crc_entries, file->path))
+		file_set_add_name(ctx->files_to_add, file->path);
+
 	return 0;
 }
 
@@ -259,34 +358,45 @@ static int load_filtered_dir(const char* dir_path, file_set *crc_entries, file_s
  *
  * @param file the hash-file to add sums into
  * @param crc_entries file-set of files to omit from adding
+ * @param removed_entries inode-line-set of files not found on the filesystem
  * @return 0 on success, -1 on error
  */
-static int add_new_crc_entries(file_t* file, file_set *crc_entries)
+static int add_new_crc_entries(file_t* file, file_set *crc_entries, inode_line_set* removed_entries)
 {
-	file_set* files_to_add;
 	char* dir_path;
 	int res = 0;
+	struct update_call_back_ctx ctx;
+	struct file_search_data search_data;
+	file_t dir;
+
+	ctx.files_to_add = file_set_new();
+	ctx.crc_entries = crc_entries;
+	ctx.removed_entries = removed_entries;
+
+	search_data.max_depth = opt.search_data->max_depth ? opt.search_data->max_depth : 1;
+	search_data.options = opt.search_data->options;
+	search_data.call_back = update_file_callback;
+	search_data.call_back_data.pval = &ctx;
 
 	dir_path = get_dirname(file->path);
-	files_to_add = file_set_new();
+	file_init(&dir, dir_path, FILE_IFDIR | FILE_OPT_DONT_FREE_PATH);
 
-	/* load into files_to_add files from directory not present in the crc_entries */
-	load_filtered_dir(dir_path, crc_entries, files_to_add);
+	dir_scan(&dir, &search_data);
 
-	if (files_to_add->size > 0) {
+	if (ctx.files_to_add->size > 0) {
 		/* sort files by path */
-		file_set_sort_by_path(files_to_add);
+		file_set_sort_by_path(ctx.files_to_add);
 
 		/* calculate and write crc sums to the file */
-		res = add_sums_to_file(file, dir_path, files_to_add);
-
-		if (res == 0 && opt.fmt == FMT_SFV && !rhash_data.interrupted) {
-			/* move SFV header from the end of updated file to its head */
-			res = fix_sfv_header(file);
-		}
+		res = add_sums_to_file(file, dir_path, ctx.files_to_add, removed_entries);
 	}
 
-	file_set_free(files_to_add);
+	if (res == 0 && opt.fmt == FMT_SFV && !rhash_data.interrupted) {
+		/* move SFV header from the end of updated file to its head */
+		res = fix_sfv_header(file);
+	}
+
+	file_set_free(ctx.files_to_add);
 	free(dir_path);
 	return res;
 }
@@ -349,7 +459,7 @@ static int fix_sfv_header(file_t* file)
 	/* overwrite the hash file with a new one */
 	if (!err && file_rename(&new_file, file) < 0) {
 		log_error(_("can't move %s to %s: %s\n"),
-			new_file.path, file->path, strerror(errno));
+				  new_file.path, file->path, strerror(errno));
 	}
 	file_cleanup(&new_file);
 	return (err ? -1 : 0);

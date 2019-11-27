@@ -222,8 +222,10 @@ void file_cleanup(file_t* file)
 #endif /* _WIN32 */
 
 	free(file->data);
+    if(file->stats)
+	    free(file->stats);
 	file->data = NULL;
-	file->mtime = 0;
+	file->stats = NULL;
 	file->size = 0;
 	file->mode = 0;
 }
@@ -324,30 +326,37 @@ int file_stat(file_t* file, int fstat_flags)
 	assert(errno != 0);
 	return -1;
 #else
-	struct stat st;
 	int res = 0;
 	file->size  = 0;
-	file->mtime = 0;
+    if (file->stats) {
+        free(file->stats);
+        file->stats = NULL;
+    }
+	file->stats = malloc(sizeof(struct stat));
+	memset(file->stats, 0, sizeof(struct stat));
 	file->mode  &= (FILE_OPT_DONT_FREE_PATH | FILE_IFROOT | FILE_IFSTDIN);
 
 	if ((fstat_flags & FUseLstat) != 0) {
-		if (lstat(file->path, &st) < 0) return -1;
-		if (S_ISLNK(st.st_mode))
+		if (lstat(file->path, file->stats) < 0) return -1;
+		if (S_ISLNK(file->stats->st_mode))
 			file->mode |= FILE_IFLNK; /* it's a symlink */
 	}
 	else
-		res = stat(file->path, &st);
+		res = stat(file->path, file->stats);
 
 	if (res == 0) {
-		file->size  = st.st_size;
-		file->mtime = st.st_mtime;
+		file->size  = file->stats->st_size;
 
-		if (S_ISDIR(st.st_mode)) {
+		if (S_ISDIR(file->stats->st_mode)) {
 			file->mode |= FILE_IFDIR;
-		} else if (S_ISREG(st.st_mode)) {
+		} else if (S_ISREG(file->stats->st_mode)) {
 			/* it's a regular file or a symlink pointing to a regular file */
 			file->mode |= FILE_IFREG;
 		}
+	}
+	else {
+	    free(file->stats);
+        file->stats = NULL;
 	}
 	return res;
 #endif

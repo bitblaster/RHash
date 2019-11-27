@@ -3,6 +3,8 @@
 # Usage: test_rhash.sh [ --full | --shared ] <PATH-TO-EXECUTABLE>
 export LC_ALL=C
 
+CHECK_LEAKS=N
+
 # read options
 while [ "$#" -gt 0 ]; do
   case $1 in
@@ -92,10 +94,21 @@ HASHOPT="`$rhash --list-hashes|sed 's/ .*$//;/[^23]-/s/-\([0-9R]\)/\1/'|tr A-Z a
 fail_cnt=0
 test_num=1
 sub_test=0
+base_rhash="$rhash"
+
+compute_command() {
+  if [ "$CHECK_LEAKS" = "Y" ]; then
+    rhash="/usr/bin/valgrind --tool=memcheck --xml=yes --xml-file=/tmp/valgrind-$1_$2 --gen-suppressions=all --leak-check=full --leak-resolution=med --track-origins=yes --vgdb=no $base_rhash"
+  else
+    rhash="$base_rhash"
+  fi
+}
+
 new_test() {
   printf "%2u. %s" $test_num "$1"
-  test_num=$((test_num+1))
   sub_test=0
+  compute_command $test_num $((sub_test+1))
+  test_num=$((test_num+1))
 }
 
 print_failed() {
@@ -106,6 +119,7 @@ print_failed() {
 # verify obtained value $1 against the expected value $2
 check() {
   sub_test=$((sub_test+1))
+  compute_command $((test_num-1)) $((sub_test+1))
   if [ "$1" = "$2" ]; then
     test "$3" = "." || echo "Ok"
   else
@@ -132,6 +146,7 @@ match_line() {
 # match obtained value $1 against given grep-regexp $2
 match() {
   sub_test=$((sub_test+1))
+  compute_command $((test_num-1)) $((sub_test+1))
   if echo "$1" | grep -vq "$2"; then
     print_failed "$3"
     echo "obtained: \"$1\""
@@ -310,6 +325,108 @@ $rhash -c none-existent.file 2>/dev/null
 check "$?" "2" .
 $rhash -H test1K.data >/dev/null
 check "$?" "0"
+
+new_test "test update:                "
+$rhash --simple -o test.out test1K.data 2>/dev/null
+TEST_RESULT=$( $rhash --simple -u test.out 2>&1 )
+check "$TEST_RESULT" "" .
+cp test1K.data test2K.data
+cat test1K.data >> test2K.data
+mkdir subdir
+cp test1K.data subdir/test3K.data
+cat test1K.data >> subdir/test3K.data
+cat test1K.data >> subdir/test3K.data
+TEST_RESULT=$( $rhash --simple -u test.out 2>&1 )
+check "$TEST_RESULT" "Updated: test.out" .
+TEST_RESULT=$( cat test.out | grep -c data )
+check "$TEST_RESULT" "2" .
+TEST_RESULT=$( cat test.out | grep test2K.data )
+check "$TEST_RESULT" "9f5edd58  test2K.data" .
+TEST_RESULT=$( $rhash --simple -r -u test.out 2>&1 )
+check "$TEST_RESULT" "Updated: test.out" .
+TEST_RESULT=$( cat test.out | grep -c data )
+check "$TEST_RESULT" "3" .
+TEST_RESULT=$( cat test.out | grep test3K.data )
+check "$TEST_RESULT" "4fcac72d  subdir/test3K.data" .
+mv test2K.data test2K_moved.data
+TEST_RESULT=$( $rhash --simple -r -u test.out 2>&1 )
+check "$TEST_RESULT" "Updated: test.out" .
+TEST_RESULT=$( cat test.out | grep -c data )
+check "$TEST_RESULT" "4" 
+rm -rf test.out test2K*.data subdir
+
+new_test "test update remove-missing: "
+$rhash --simple -o test.out test1K.data 2>/dev/null
+TEST_RESULT=$( $rhash --simple -u test.out 2>&1 )
+check "$TEST_RESULT" "" .
+cp test1K.data test2K.data
+cat test1K.data >> test2K.data
+mkdir subdir
+cp test1K.data subdir/test3K.data
+cat test1K.data >> subdir/test3K.data
+cat test1K.data >> subdir/test3K.data
+TEST_RESULT=$( $rhash --simple --remove-missing -u test.out 2>&1 )
+check "$TEST_RESULT" "Updated: test.out" .
+TEST_RESULT=$( cat test.out | grep -c data )
+check "$TEST_RESULT" "2" .
+mv test2K.data test2K_moved.data
+TEST_RESULT=$( $rhash --simple --remove-missing -r -u test.out 2>&1 )
+check "$TEST_RESULT" "Updated: test.out" .
+TEST_RESULT=$( cat test.out | grep -c data )
+check "$TEST_RESULT" "3" .
+TEST_RESULT=$( cat test.out | grep test2K.data )
+check "$TEST_RESULT" "" .
+TEST_RESULT=$( cat test.out | grep test2K_moved.data )
+check "$TEST_RESULT" "9f5edd58  test2K_moved.data" .
+mv subdir/test3K.data subdir/test3K_moved.data
+TEST_RESULT=$( $rhash --simple --remove-missing -r -u test.out 2>&1 )
+check "$TEST_RESULT" "Updated: test.out" .
+TEST_RESULT=$( cat test.out | grep -c data )
+check "$TEST_RESULT" "3" .
+TEST_RESULT=$( cat test.out | grep test3K.data )
+check "$TEST_RESULT" "" .
+TEST_RESULT=$( cat test.out | grep test3K_moved.data )
+check "$TEST_RESULT" "4fcac72d  subdir/test3K_moved.data"
+rm -rf test.out test2K*.data subdir
+
+new_test "test detect-changes:        "
+cp test1K.data test2K.data
+cat test1K.data >> test2K.data
+mkdir subdir
+cp test1K.data subdir/test3K.data
+cat test1K.data >> subdir/test3K.data
+cat test1K.data >> subdir/test3K.data
+$rhash --simple --detect-changes -o test.out test2K.data 2>/dev/null
+TEST_RESULT=$( $rhash --simple --detect-changes --exclude=test1K.data -u test.out 2>&1 )
+check "$TEST_RESULT" "" .
+TEST_RESULT=$( cat test.out | grep test2K.data )
+check "$TEST_RESULT" "9f5edd58  $( stat -c i%it%Y test2K.data )  test2K.data" .
+# changing just the crc to verify that this doesn't trigger any update
+echo "00000000  $( stat -c i%it%Y test2K.data )  test2K.data" > test.out
+TEST_RESULT=$( $rhash --simple --detect-changes --exclude=test1K.data -u test.out 2>&1 )
+check "$TEST_RESULT" "" .
+# renaming the file will trigger a move detection, keeping the same crc (00000000)
+mv test2K.data test2K_moved.data
+TEST_RESULT=$( $rhash --simple --detect-changes --exclude=test1K.data -u test.out 2>&1 )
+check "$TEST_RESULT" "Updated: test.out" .
+TEST_RESULT=$( cat test.out | grep test2K_moved.data )
+check "$TEST_RESULT" "00000000  $( stat -c i%it%Y test2K_moved.data )  test2K_moved.data" .
+# moving the file in a subdirectory will also trigger a move detection, keeping the same crc (00000000)...
+mv test2K_moved.data subdir
+TEST_RESULT=$( $rhash --simple --detect-changes -r --exclude=test1K.data -u test.out 2>&1 )
+check "$TEST_RESULT" "Updated: test.out" .
+TEST_RESULT=$( cat test.out | grep test2K_moved.data )
+check "$TEST_RESULT" "00000000  $( stat -c i%it%Y subdir/test2K_moved.data )  subdir/test2K_moved.data" .
+# ...and also acquiring test3K.data recursively
+TEST_RESULT=$( cat test.out | grep -c data )
+check "$TEST_RESULT" "2" .
+# instead, altering the inode or mtime of the file will trigger an hash recalculation
+sed -r -i "s|i[0-9]+t[0-9]+  subdir/test2K|i12345t12345  subdir/test2K|g" test.out
+TEST_RESULT=$( $rhash --simple --detect-changes -r --exclude=test1K.data -u test.out 2>&1 )
+check "$TEST_RESULT" "Updated: test.out" .
+TEST_RESULT=$( cat test.out | grep test2K_moved.data )
+check "$TEST_RESULT" "9f5edd58  $( stat -c i%it%Y subdir/test2K_moved.data )  subdir/test2K_moved.data"
+rm -rf test.out test2K*.data subdir
 
 if [ $fail_cnt -gt 0 ]; then
   echo "Failed $fail_cnt checks"
