@@ -165,15 +165,15 @@ static int add_sums_to_file(file_t* file, char* dir_path, file_set *files_to_add
 
 	/* append hash sums to the updated crc file */
 	for (i = 0; i < files_to_add->size; i++, rhash_data.processed++) {
-		file_t file;
+		file_t tmp_file;
 		char *print_path = file_set_get(files_to_add, i)->filepath;
-		memset(&file, 0, sizeof(file));
+		memset(&tmp_file, 0, sizeof(tmp_file));
 
 		if (dir_path[0] != '.' || dir_path[1] != 0) {
 			/* prepend the file path by directory path */
-			file_init(&file, make_path(dir_path, print_path), 0);
+			file_init(&tmp_file, make_path(dir_path, print_path), 0);
 		} else {
-			file_init(&file, print_path, FILE_OPT_DONT_FREE_PATH);
+			file_init(&tmp_file, print_path, FILE_OPT_DONT_FREE_PATH);
 		}
 
 		if (opt.fmt == FMT_SFV) {
@@ -182,12 +182,12 @@ static int add_sums_to_file(file_t* file, char* dir_path, file_set *files_to_add
 				print_banner = 0;
 			}
 		}
-		file_stat(&file, 0);
+		file_stat(&tmp_file, 0);
 
 		/* print hash sums to the crc file */
-		calculate_and_print_sums(fd, &file, print_path);
+		calculate_and_print_sums(fd, &tmp_file, print_path);
 
-		file_cleanup(&file);
+		file_cleanup(&tmp_file);
 
 		if (rhash_data.interrupted) {
 			fclose(fd);

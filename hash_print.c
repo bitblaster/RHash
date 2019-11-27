@@ -265,15 +265,15 @@ print_item* parse_percent_item(const char** str)
 	/* if a complicated token enconuntered */
 	if (*format == '{') {
 		/* parse the token of the kind "%{some-token}" */
-		const char* p = ++format;
-		for (; isalnum((unsigned char)*p) || (*p == '-'); p++);
-		if (*p == '}') {
-			hash_id = printf_name_to_id(format, (int)(p - (format)), &modifier_flags);
+		const char* q = ++format;
+		for (; isalnum((unsigned char)*q) || (*q == '-'); q++);
+		if (*q == '}') {
+			hash_id = printf_name_to_id(format, (int)(q - (format)), &modifier_flags);
 			format--;
 			if (hash_id || modifier_flags == PRINT_URLNAME || modifier_flags == PRINT_MTIME) {
 				/* set uppercase flag if the first letter of printf-entity is uppercase */
 				modifier_flags |= (format[1] & 0x20 ? 0 : PRINT_FLAG_UPPERCASE);
-				format = p;
+				format = q;
 				id_found = 1;
 			}
 		} else {
@@ -666,7 +666,7 @@ void init_printf_format(strbuf_t* out)
 * @param file the file info to print
 * @return 0 on success, -1 on fail with error code stored in errno
 */
-int print_sfv_header_line(FILE* out, file_t* file, const char* printpath)
+int print_sfv_header_line(FILE* out, const file_t* file, const char* printpath)
 {
 	char buf[24];
 

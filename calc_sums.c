@@ -778,15 +778,15 @@ void run_benchmark(unsigned hash_id, unsigned flags)
 	if ((flags & BENCHMARK_CPB) != 0 && !rhash_data.interrupted) {
 		unsigned int c1 = -1, c2 = -1;
 		unsigned volatile long long cy0, cy1, cy2;
-		int msg_size = 128 * 1024;
+		int int_msg_size = 128 * 1024;
 
 		/* make 200 tries */
 		for (i = 0; i < 200; i++) {
 			cy0 = read_tsc();
-			benchmark_loop(hash_id, message, sizeof(message), msg_size / sizeof(message), out);
+			benchmark_loop(hash_id, message, sizeof(message), int_msg_size / sizeof(message), out);
 			cy1 = read_tsc();
-			benchmark_loop(hash_id, message, sizeof(message), msg_size / sizeof(message), out);
-			benchmark_loop(hash_id, message, sizeof(message), msg_size / sizeof(message), out);
+			benchmark_loop(hash_id, message, sizeof(message), int_msg_size / sizeof(message), out);
+			benchmark_loop(hash_id, message, sizeof(message), int_msg_size / sizeof(message), out);
 			cy2 = read_tsc();
 
 			cy2 -= cy1;
@@ -794,7 +794,7 @@ void run_benchmark(unsigned hash_id, unsigned flags)
 			c1 = (unsigned int)(c1 > cy1 ? cy1 : c1);
 			c2 = (unsigned int)(c2 > cy2 ? cy2 : c2);
 		}
-		cpb = ((c2 - c1) + 1) / (double)msg_size;
+		cpb = ((c2 - c1) + 1) / (double)int_msg_size;
 	}
 #endif /* HAVE_TSC */
 
